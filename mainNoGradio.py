@@ -18,15 +18,6 @@ NUM_STEPS = 1000
 ALPHA = 1
 BETA = 1e5
 
-device = "cpu"
-
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
-
 
 class ContentLoss(nn.Module):
     def __init__(self, target):
@@ -62,7 +53,7 @@ normalizationStd = [0.229, 0.224, 0.225]
 
 
 class Normalization(nn.Module):
-    def __init__(self, mean, std):
+    def __init__(self, mean, std, device):
         super(Normalization, self).__init__()
         self.mean = torch.tensor(mean).view(-1, 1, 1).to(device)
         self.std = torch.tensor(std).view(-1, 1, 1).to(device)
@@ -71,10 +62,12 @@ class Normalization(nn.Module):
         return (img - self.mean) / self.std
 
 
-def getModelAndLosses(content, style):
-    vgg = models.vgg16(weights="DEFAULT").features.eval().to(device)
+def getModelAndLosses(content, style, device):
+    vgg = models.vgg16(weights="DEFAULT").features.to(device).eval()
 
-    normalization = Normalization(normalizationMean, normalizationStd)
+    normalization = Normalization(normalizationMean, normalizationStd, device).to(
+        device
+    )
 
     contentLayers = ["relu_1", "relu_2", "relu_3", "relu_4"]
     styleLayers = ["relu_1", "relu_2", "relu_3", "relu_4"]
@@ -128,16 +121,13 @@ def getModelAndLosses(content, style):
 
 
 def runStyleTransfer(
-    modelAndLosses,
-    target,
-    numSteps,
-    contentWeight,
-    styleWeight,
-    styleIndWeight,
+    content, style, target, numSteps, contentWeight, styleWeight, styleIndWeight, device
 ):
     target.requires_grad_(True)
 
-    model, modelContentLosses, modelStyleLosses = modelAndLosses
+    model, modelContentLosses, modelStyleLosses = getModelAndLosses(
+        content, style, device
+    )
 
     model.eval()
     model.requires_grad_(False)
@@ -153,12 +143,12 @@ def runStyleTransfer(
         model(target)
 
         contentLoss = 0
-        styleLoss = [0 for _ in range(2)]
+        styleLoss = [0 for _ in range(len(style))]
 
         for loss in modelContentLosses:
             contentLoss += loss.loss
 
-        for i in range(2):
+        for i in range(len(style)):
             for loss in modelStyleLosses[i]:
                 styleLoss[i] += loss.loss
 
@@ -178,7 +168,7 @@ def runStyleTransfer(
     return target
 
 
-def importImages(contentImageLoc, styleImageLoc, splits, overlap, scale):
+def importImages(contentImageLoc, styleImageLoc, splits, overlap, scale, device):
     contentImage = Image.open(contentImageLoc).convert("RGB")
     imageSizeW, imageSizeH = contentImage.size
 
@@ -209,6 +199,8 @@ def importImages(contentImageLoc, styleImageLoc, splits, overlap, scale):
         image = loader(image).unsqueeze(0).to(device)
         styleImages.append(image)
 
+    print(contentImage.get_device())
+
     return contentImage, styleImages
 
 
@@ -235,10 +227,7 @@ def getSplitImages(contentImage, styleImages, splits, overlap):
     return contentImage, styleImages
 
 
-def joinSplitImages(splitImages, overlap):
-    if overlap == 0:
-        return torch.cat(splitImages, dim=3)
-
+def joinSplitImages(splitImages, overlap, device):
     targetImages = splitImages[0]
 
     for i in range(1, len(splitImages)):
@@ -267,9 +256,10 @@ def runSplitStyleTransfer(
     splits,
     overlap,
     scale,
+    device,
 ):
     contentImage, styleImages = importImages(
-        contentLoc, styleLoc, splits, overlap, scale
+        contentLoc, styleLoc, splits, overlap, scale, device
     )
 
     splitContentImages, splitStyleImages = getSplitImages(
@@ -284,31 +274,38 @@ def runSplitStyleTransfer(
         print("Running split {}".format(i))
         targetImage = content.clone()
         targetImage = runStyleTransfer(
-            getModelAndLosses(content, [style1, style2]),
+            content,
+            [style1, style2],
             targetImage,
             numSteps,
             contentWeight,
             styleWeight,
             1 - i * (1 / (splits - 1)),
+            device,
         )
         targetImages.append(targetImage)
 
-    targetImage = joinSplitImages(targetImages, overlap)
+    targetImage = joinSplitImages(targetImages, overlap, device)
 
     return contentImage, styleImages, targetImage
 
 
-def styleTransfer(
+def style_transfer(
     contentImageLoc,
     styleImage1Loc,
     styleImage2Loc,
     num_steps=NUM_STEPS,
     alpha=ALPHA,
     beta=BETA,
-    splits=10,
-    overlap=10,
-    scale=1,
 ):
+    device = "cpu"
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
 
     contentImage, styleImages, targetImage = runSplitStyleTransfer(
         contentImageLoc,
@@ -316,91 +313,28 @@ def styleTransfer(
         num_steps,
         alpha,
         beta,
-        splits,
-        overlap,
-        scale,
+        splits=20,
+        overlap=10,
+        scale=1,
+        device=device,
     )
 
-    unloader = transforms.ToPILImage()
-    return unloader(targetImage[0].cpu().detach())
+    return targetImage
 
 
-with gr.Blocks() as demo:
-
-    gr.Markdown(
-        """
-    # Neural Style Transfer Between Two Images
-    * This app demonstrates transferring the styles of two images onto a third image. 
-    * The content image is the image whose content you want to keep, and the style images are the images whose style you want to transfer.
-    * This works by splitting the image into multiple parts and transferring the styles of each part separately.
-                """
-    )
-
-    with gr.Row():
-        with gr.Column():
-            with gr.Row():
-                content = gr.Image(label="Content Image", type="filepath")
-                style1 = gr.Image(label="Style Image 1", type="filepath")
-                style2 = gr.Image(label="Style Image 2", type="filepath")
-            with gr.Row():
-                num_steps = gr.Number(
-                    NUM_STEPS, label="Number of Steps", minimum=1, maximum=1000
-                )
-                alpha = gr.Number(
-                    ALPHA, label="Content Weight", minimum=1, maximum=1000
-                )
-                beta = gr.Number(BETA, label="Style Weight", minimum=1, maximum=1e10)
-            with gr.Row():
-                splits = gr.Number(10, label="Number of Splits", minimum=0)
-                overlap = gr.Number(20, label="Number of Overlapping Pixels", minimum=0)
-                scale = gr.Number(1, label="Scale", minimum=0.1, maximum=2)
-
-        output = gr.Image(label="Output Image", format="png")
-
-    button = gr.Button("Run Style Transfer")
-
-    gr.Examples(
-        examples=[
-            [
-                "./tests/images/amber.jpg",
-                "./tests/images/mosaic.jpg",
-                "./tests/images/rain-princess-cropped.jpg",
-                1000,
-                1,
-                1e5,
-                10,
-                20,
-                0.25,
-            ]
-        ],
-        inputs=[
-            content,
-            style1,
-            style2,
-            num_steps,
-            alpha,
-            beta,
-            splits,
-            overlap,
-            scale,
-        ],
-    )
-
-    button.click(
-        styleTransfer,
-        inputs=[
-            content,
-            style1,
-            style2,
-            num_steps,
-            alpha,
-            beta,
-            splits,
-            overlap,
-            scale,
-        ],
-        outputs=output,
-    )
-
+demo = gr.Interface(
+    style_transfer,
+    [
+        gr.Image(label="Content Image", type="filepath"),
+        gr.Image(label="Style Image 1", type="filepath"),
+        gr.Image(label="Style Image 2", type="filepath"),
+        gr.Number(NUM_STEPS, label="Number of Steps"),
+        gr.Number(ALPHA, label="Content Weight"),
+        gr.Number(BETA, label="Style Weight"),
+    ],
+    gr.Image(label="Output Image"),
+    title="Style Transfer",
+    description="Transfer the style of two images to a third image.",
+)
 
 demo.launch()
