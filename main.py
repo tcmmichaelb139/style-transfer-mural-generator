@@ -382,8 +382,8 @@ with gr.Blocks() as demo:
                 500,
             ],
             [
-                "./tests/images/PixelartCity.png",
-                "./tests/images/abstract-place.png",
+                "./tests/images/PixelartCity.jpeg",
+                "./tests/images/abstract-place.jpeg",
                 "./tests/images/rain-princess-cropped.jpg",
                 500,
                 1,
