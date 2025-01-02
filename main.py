@@ -181,9 +181,11 @@ def runStyleTransfer(
     return target
 
 
-def importImages(contentImageLoc, styleImageLoc, splits, overlap, scale):
+def importImages(contentImageLoc, styleImageLoc, splits, overlap, desiredWidth):
     contentImage = Image.open(contentImageLoc).convert("RGB")
     imageSizeW, imageSizeH = contentImage.size
+
+    scale = desiredWidth / imageSizeW
 
     imageSizeW = int(imageSizeW * scale)
     imageSizeH = int(imageSizeH * scale)
@@ -269,10 +271,10 @@ def runSplitStyleTransfer(
     styleWeight,
     splits,
     overlap,
-    scale,
+    desiredWidth,
 ):
     contentImage, styleImages = importImages(
-        contentLoc, styleLoc, splits, overlap, scale
+        contentLoc, styleLoc, splits, overlap, desiredWidth
     )
 
     splitContentImages, splitStyleImages = getSplitImages(
@@ -302,7 +304,7 @@ def runSplitStyleTransfer(
     return contentImage, styleImages, targetImage
 
 
-@spaces.GPU
+@spaces.GPU(duration=120)
 def styleTransfer(
     contentImageLoc,
     styleImage1Loc,
@@ -312,7 +314,7 @@ def styleTransfer(
     beta=BETA,
     splits=10,
     overlap=10,
-    scale=1,
+    desiredWidth=500,
 ):
 
     contentImage, styleImages, targetImage = runSplitStyleTransfer(
@@ -323,7 +325,7 @@ def styleTransfer(
         beta,
         splits,
         overlap,
-        scale,
+        desiredWidth,
     )
 
     unloader = transforms.ToPILImage()
@@ -358,7 +360,9 @@ with gr.Blocks() as demo:
             with gr.Row():
                 splits = gr.Number(10, label="Number of Splits", minimum=0)
                 overlap = gr.Number(20, label="Number of Overlapping Pixels", minimum=0)
-                scale = gr.Number(1, label="Scale", minimum=0.1, maximum=2)
+                desiredWidth = gr.Number(
+                    500, label="Output Width", minimum=50, maximum=2000
+                )
 
         output = gr.Image(label="Output Image", format="png")
 
@@ -375,8 +379,19 @@ with gr.Blocks() as demo:
                 1e5,
                 10,
                 20,
-                0.25,
-            ]
+                500,
+            ],
+            [
+                "./tests/images/PixelartCity.png",
+                "./tests/images/abstract-place.png",
+                "./tests/images/rain-princess-cropped.jpg",
+                500,
+                1,
+                1e5,
+                10,
+                50,
+                1000,
+            ],
         ],
         inputs=[
             content,
@@ -387,7 +402,7 @@ with gr.Blocks() as demo:
             beta,
             splits,
             overlap,
-            scale,
+            desiredWidth,
         ],
     )
 
@@ -402,7 +417,7 @@ with gr.Blocks() as demo:
             beta,
             splits,
             overlap,
-            scale,
+            desiredWidth,
         ],
         outputs=output,
     )
