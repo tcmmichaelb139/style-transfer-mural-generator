@@ -1,3 +1,5 @@
+import spaces
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -128,7 +130,8 @@ def getModelAndLosses(content, style):
 
 
 def runStyleTransfer(
-    modelAndLosses,
+    content,
+    style,
     target,
     numSteps,
     contentWeight,
@@ -137,7 +140,7 @@ def runStyleTransfer(
 ):
     target.requires_grad_(True)
 
-    model, modelContentLosses, modelStyleLosses = modelAndLosses
+    model, modelContentLosses, modelStyleLosses = getModelAndLosses(content, style)
 
     model.eval()
     model.requires_grad_(False)
@@ -284,7 +287,8 @@ def runSplitStyleTransfer(
         print("Running split {}".format(i))
         targetImage = content.clone()
         targetImage = runStyleTransfer(
-            getModelAndLosses(content, [style1, style2]),
+            content,
+            [style1, style2],
             targetImage,
             numSteps,
             contentWeight,
@@ -298,6 +302,7 @@ def runSplitStyleTransfer(
     return contentImage, styleImages, targetImage
 
 
+@spaces.GPU
 def styleTransfer(
     contentImageLoc,
     styleImage1Loc,
@@ -403,4 +408,4 @@ with gr.Blocks() as demo:
     )
 
 
-demo.launch()
+demo.launch(share=True)
